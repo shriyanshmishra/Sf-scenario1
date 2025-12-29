@@ -1,5 +1,7 @@
 trigger AccountTrigger on Account (before insert) {
     for (Account acc : Trigger.new) {
-        acc.Description = 'Verified by DevOps Pipeline';
+        // Developer B wants a different description
+        acc.Description = 'Description set by Developer B';
+        acc.Rating = 'Hot';
     }
 }

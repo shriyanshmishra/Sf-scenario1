@@ -1,0 +1,77 @@
+name: Feature Branch Scratch Org CI
+
+on:
+  push:
+    branches:
+      - 'feature/**'
+      - 'main'
+
+  pull_request:
+    branches:
+      - 'main'
+
+jobs:
+  scratch-org-validate-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install Salesforce CLI
+        run: npm install @salesforce/cli@latest --global
+
+      - name: Import auth for existing scratch org
+        env:
+          SFDX_AUTH_URL: ${{ secrets.SFDX_AUTH_URL }}
+        run: |
+          echo "$SFDX_AUTH_URL" > scratch-auth.txt
+          sf org login sfdx-url --sfdx-url-file scratch-auth.txt --alias fixed-scratch
+          sf org display --target-org fixed-scratch --verbose
+
+      - name: Calculate changed files (git diff)
+        run: |
+          git fetch origin main
+          git diff --name-only origin/main...HEAD > changed_files.txt
+          grep '^force-app/main/default/' changed_files.txt > filtered_changed_files.txt || true
+
+      - name: Create manifest/package.xml
+        run: |
+          mkdir -p manifest
+          node scripts/generate-package-xml.js filtered_changed_files.txt manifest/package.xml
+
+      - name: Show package.xml content
+        run: |
+          echo "===== Generated package.xml content ====="
+          cat manifest/package.xml || echo "package.xml is empty"
+          echo "========================================="
+
+      - name: Validate Deployment (check-only)
+        id: validate
+        run: |
+          if ! grep -q "<types>" manifest/package.xml; then
+            echo "No Salesforce metadata changes detected. Skipping validation."
+            exit 0
+          fi
+          sf project deploy validate \
+            --manifest manifest/package.xml \
+            --target-org fixed-scratch \
+            --test-level RunLocalTests \
+            --wait 40
+
+      - name: Deploy to Scratch Org (if validation succeeded)
+        if: steps.validate.outcome == 'success'
+        run: |
+          sf project deploy start \
+            --manifest manifest/package.xml \
+            --target-org fixed-scratch \
+            --test-level RunLocalTests \
+            --wait 40 \
+            --ignore-conflicts
